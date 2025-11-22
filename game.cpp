@@ -20,6 +20,8 @@ typedef union Vector2
 typedef struct Entity
 {
     bool isActive;
+    // player only
+    bool IsOverlap;
     Vector2 size;
     Vector2 position;
     Vector2 velocity;
@@ -30,41 +32,38 @@ typedef struct Entity
 #define MAX_ENTITIES 100
 typedef struct World
 {
+    float elapsedTime = 0; // modulates difficulty
+    Vector2 screenSize = {};
     Entity entities[MAX_ENTITIES];
 } World;
 
+void SpawnEnemy(World *world);
 void RenderEntity(SDL_Renderer *renderer, Entity *entity);
+bool IsAABBOverlap(Vector2 position1, Vector2 size1, Vector2 position2, Vector2 size2);
 
 int main(int argc, char *argv[])
 {
     SDL_Init(SDL_INIT_VIDEO);
     SDL_Log("start!");
 
-    Vector2 screenSize = {};
-    screenSize.x = 480;
-    screenSize.y = 800;
+    World world = {};
+    (&world)->screenSize = {};
+    (&world)->screenSize.x = 480;
+    (&world)->screenSize.y = 800;
 
-    SDL_Window *window = SDL_CreateWindow("My First Game", screenSize.x, screenSize.y, 0);
+    SDL_Window *window = SDL_CreateWindow("My First Game", world.screenSize.x, world.screenSize.y, 0);
     SDL_Renderer *renderer = SDL_CreateRenderer(window, NULL);
 
-    World world = {};
     Entity player = {};
     player.speed = 5.0f;
-    player.position.x = screenSize.x / 2;
-    player.position.y = screenSize.y - screenSize.y / 10;
+    player.position.x = world.screenSize.x / 2;
+    player.position.y = world.screenSize.y - world.screenSize.y / 10;
     player.size.x = 50;
     player.size.y = 50;
 
-    for (int i = 0; i < 1; i++)
-    {
-        world.entities[i].position.x = 100;
-        world.entities[i].position.y = 200;
-        world.entities[i].size.x = 50;
-        world.entities[i].size.y = 50;
-        world.entities[i].speed = 3.0f;
-        world.entities[i].isActive = true;
-        world.entities[i].isEnemy = true;
-    }
+    float enemySpawnCooldown = 3000;
+    float timeBeforeEnemy = enemySpawnCooldown;
+    SpawnEnemy(&world);
 
     bool running = true;
     SDL_Event event;
@@ -76,11 +75,12 @@ int main(int argc, char *argv[])
     SDL_Log("start!");
 
     InputState inputState = {};
-    while (running)
+    while (running) // fraME LOOP, RENDER LOOP
     {
         LAST = NOW;
         NOW = SDL_GetPerformanceCounter();
-        deltaTime += (double)((NOW - LAST) * 1000 / (double)SDL_GetPerformanceFrequency());
+        auto lastFrameDuration = (double)((NOW - LAST) * 1000 / (double)SDL_GetPerformanceFrequency());
+        deltaTime += lastFrameDuration;  // 22
         deltaTime = SDL_min(deltaTime, 500);
 
 // Read Input
@@ -150,12 +150,9 @@ int main(int argc, char *argv[])
 
 #pragma endregion InputRead
 
-        while (deltaTime > fixedTickDuration)
+        while (deltaTime > fixedTickDuration) // fixed loop 
         {
-            // if (inputState.up)
-            //     player.position.y -= player.speed;
-            // if (inputState.down)
-            //     player.position.y += player.speed;
+            
             if (inputState.left)
                 player.position.x -= player.speed;
             if (inputState.right)
@@ -164,12 +161,20 @@ int main(int argc, char *argv[])
             deltaTime -= fixedTickDuration;
 
             // enforce bounds
-            if (player.position.x < 0 - player.size.x)
-                player.position.x = screenSize.x;
-
-            if (player.position.x > screenSize.x)
+            if (player.position.x < 0)
                 player.position.x = 0;
 
+            if (player.position.x > world.screenSize.x - player.size.x)
+                player.position.x = world.screenSize.x - player.size.x;
+
+            timeBeforeEnemy -= fixedTickDuration;
+            if (timeBeforeEnemy < 0)
+            {
+                timeBeforeEnemy += enemySpawnCooldown;
+                SpawnEnemy(&world);
+            }
+
+            player.IsOverlap = false;
             // simulate enemies going down
             for (int i = 0; i < MAX_ENTITIES; i++)
             {
@@ -178,6 +183,51 @@ int main(int argc, char *argv[])
                     continue;
 
                 entity->position.y += entity->speed;
+
+                if (entity->isEnemy)
+                {
+                    // enemy direct hit detection
+                    if (IsAABBOverlap(entity->position, entity->size, player.position, player.size))
+                    {
+                        player.IsOverlap = true;
+                        entity->isActive = false;
+                    }
+
+                    // enemy going off screen detection
+                    if (entity->position.y > world.screenSize.y)
+                    {
+                        entity->isActive = false;
+                    }
+                }
+            }
+
+            // set difficulty
+            world.elapsedTime += fixedTickDuration;
+
+            
+            if (world.elapsedTime / 1000 / 60 > 3)
+            {
+                enemySpawnCooldown = 50;
+            }
+            else if (world.elapsedTime / 1000 / 60 > 3)
+            {
+                enemySpawnCooldown = 100;
+            }
+            else if (world.elapsedTime / 1000 / 60 > 2)
+            {
+                enemySpawnCooldown = 300;
+            }
+            else if (world.elapsedTime / 1000 / 60 > 1)
+            {
+                enemySpawnCooldown = 500;
+            }
+            else if (world.elapsedTime / 1000 > 30)
+            {
+                enemySpawnCooldown = 1000;
+            }
+            else if (world.elapsedTime / 1000 > 10)
+            {
+                enemySpawnCooldown = 2000;
             }
         }
 
@@ -187,7 +237,10 @@ int main(int argc, char *argv[])
         SDL_RenderClear(renderer);
 
         // Draw player (red square)
-        SDL_SetRenderDrawColor(renderer, 255, 0, 0, 255);
+        if (player.IsOverlap)
+            SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
+        else
+            SDL_SetRenderDrawColor(renderer, 255, 0, 0, 255);
         SDL_FRect rect = {player.position.x, player.position.y, player.size.x, player.size.y};
         SDL_RenderFillRect(renderer, &rect);
 
@@ -222,5 +275,36 @@ void RenderEntity(SDL_Renderer *renderer, Entity *entity)
         SDL_FRect rect = {entity->position.x, entity->position.y, entity->size.x, entity->size.y};
         SDL_RenderFillRect(renderer, &rect);
         return;
+    }
+}
+
+bool IsAABBOverlap(Vector2 positionA, Vector2 sizeA, Vector2 positionB, Vector2 sizeB)
+{
+    bool AIsRightOfB = positionA.x > positionB.x + sizeB.x;
+    bool AIsLeftOfB = positionA.x + sizeA.x < positionB.x;
+    bool AIsAboveB = positionA.y > positionB.y + sizeB.y;
+    bool AIsBelowB = positionA.y + sizeA.y < positionB.y;
+
+    return !(AIsRightOfB || AIsLeftOfB || AIsAboveB || AIsBelowB);
+}
+
+void SpawnEnemy(World *world)
+{
+    for (int i = 0; i < MAX_ENTITIES; i++)
+    {
+        Entity *entity = &world->entities[i];
+        if (entity->isActive)
+            continue;
+
+        auto position = SDL_rand(world->screenSize.x - 50);
+
+        world->entities[i].position.x = position;
+        world->entities[i].position.y = -entity->size.x;
+        world->entities[i].size.x = 50;
+        world->entities[i].size.y = 50;
+        world->entities[i].speed = 3.0f;
+        world->entities[i].isActive = true;
+        world->entities[i].isEnemy = true;
+        break;
     }
 }
